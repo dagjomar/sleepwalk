@@ -1,0 +1,112 @@
+#!/bin/bash
+# disablesleep — keep a Mac awake (lid closed too) for a bounded time.
+#
+#   disablesleep <duration>   disable sleep, re-enable automatically after <duration>
+#   disablesleep off          re-enable sleep now and cancel the timer
+#   disablesleep status       show the current setting and time left
+#   disablesleep check        print a warning if sleep is off with no timer running
+#
+# <duration> is 1m–5h: 45m, 2h, 1h30m.
+#
+# Wraps `pmset -a disablesleep`, which survives reboots. A root timer process
+# turns sleep back on; `check` (run from your shell rc) catches the case where
+# that timer died, e.g. after a reboot, since macOS clears /tmp at boot.
+
+set -u
+
+STATE=/tmp/disablesleep.state # "<timer pid> <expiry epoch>"
+MIN_SECS=60
+MAX_SECS=$((5 * 3600))
+
+usage() {
+  echo "usage: disablesleep <1m–5h, e.g. 45m, 2h, 1h30m> | off | status | check" >&2
+  exit 1
+}
+
+sleep_disabled() {
+  pmset -g 2>/dev/null | grep -q 'SleepDisabled[[:space:]]*1'
+}
+
+timer_pid() {
+  [ -f "$STATE" ] && cut -d' ' -f1 "$STATE"
+}
+
+timer_expiry() {
+  [ -f "$STATE" ] && cut -d' ' -f2 "$STATE"
+}
+
+timer_alive() {
+  local pid
+  pid=$(timer_pid) || return 1
+  ps -p "$pid" >/dev/null 2>&1
+}
+
+kill_timer() {
+  local pid
+  pid=$(timer_pid) && sudo kill "$pid" 2>/dev/null
+  rm -f "$STATE"
+}
+
+cmd_off() {
+  kill_timer
+  sudo pmset -a disablesleep 0 && echo "Sleep re-enabled."
+}
+
+cmd_status() {
+  if sleep_disabled; then
+    echo "Sleep: DISABLED"
+    if timer_alive; then
+      local exp
+      exp=$(timer_expiry)
+      echo "Auto re-enable at $(date -r "$exp" +%H:%M) ($(((exp - $(date +%s)) / 60)) min left)"
+    else
+      echo "No timer running. Run: disablesleep off"
+    fi
+  else
+    echo "Sleep: enabled"
+  fi
+}
+
+cmd_check() {
+  if sleep_disabled && ! timer_alive; then
+    printf '\033[31m⚠ Sleep is DISABLED with no timer running. Run: disablesleep off\033[0m\n' >&2
+  fi
+  return 0
+}
+
+parse_duration() {
+  local re='^(([0-9]+)h)?(([0-9]+)m)?$'
+  [ -n "$1" ] && [[ $1 =~ $re ]] || return 1
+  local h=${BASH_REMATCH[2]:-0} m=${BASH_REMATCH[4]:-0}
+  echo $((10#$h * 3600 + 10#$m * 60))
+}
+
+cmd_start() {
+  local secs
+  secs=$(parse_duration "$1") || usage
+  if [ "$secs" -lt "$MIN_SECS" ] || [ "$secs" -gt "$MAX_SECS" ]; then
+    echo "disablesleep: duration must be between 1m and 5h" >&2
+    exit 1
+  fi
+
+  sudo -v || exit 1
+  # Running it again replaces the old timer instead of stacking timers.
+  kill_timer
+
+  local pid
+  pid=$(sudo sh -c 'pmset -a disablesleep 1 || exit 1
+    nohup sh -c "sleep $1; pmset -a disablesleep 0; rm -f $2" >/dev/null 2>&1 &
+    echo $!' sh "$secs" "$STATE") || exit 1
+  echo "$pid $(($(date +%s) + secs))" >"$STATE"
+  echo "Sleep disabled until $(date -v+"${secs}"S +%H:%M). Cancel early: disablesleep off"
+}
+
+[ "$(uname)" = Darwin ] || { echo "disablesleep: macOS only" >&2; exit 1; }
+
+case "${1:-}" in
+  off) cmd_off ;;
+  status) cmd_status ;;
+  check) cmd_check ;;
+  -h | --help | "") usage ;;
+  *) cmd_start "$1" ;;
+esac
