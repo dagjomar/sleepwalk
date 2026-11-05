@@ -1,33 +1,33 @@
 #!/bin/bash
-# <xbar.title>disablesleep</xbar.title>
+# <xbar.title>sleepwalk</xbar.title>
 # <xbar.desc>Keep the Mac awake, lid closed too, for a set time.</xbar.desc>
-# <xbar.dependencies>disablesleep</xbar.dependencies>
+# <xbar.dependencies>sleepwalk</xbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 #
-# SwiftBar plugin for the disablesleep CLI. Symlink this file into your SwiftBar
+# SwiftBar plugin for the sleepwalk CLI. Symlink this file into your SwiftBar
 # plugin folder; it finds the CLI next to itself in the repo
-# (../disablesleep). The ".5s" in the name makes SwiftBar refresh it every 5s.
+# (../sleepwalk). The ".5s" in the name makes SwiftBar refresh it every 5s.
 
 SELF=$(readlink -f "$0")
-CLI=$(dirname "$SELF")/../disablesleep
+CLI=$(dirname "$SELF")/../sleepwalk
 # Copied instead of symlinked: fall back to the CLI on PATH. SwiftBar's PATH
 # is minimal, so add the usual user bin folders.
 if [ ! -x "$CLI" ]; then
-  CLI=$(PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v disablesleep)
+  CLI=$(PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" command -v sleepwalk)
 fi
 PRESETS="15m 30m 1h 2h 3h 5h"
 
 alert() {
-  osascript -e 'on run argv' -e 'display alert "disablesleep" message (item 1 of argv) as warning' -e 'end run' "$1" >/dev/null
+  osascript -e 'on run argv' -e 'display alert "sleepwalk" message (item 1 of argv) as warning' -e 'end run' "$1" >/dev/null
 }
 
 # Runs the CLI and shows its error, if any, as an alert instead of losing it.
 run_cli() {
   local err
-  err=$("$CLI" "$@" 2>&1 >/dev/null) || alert "${err:-disablesleep $* failed}"
+  err=$("$CLI" "$@" 2>&1 >/dev/null) || alert "${err:-sleepwalk $* failed}"
 }
 
 # Menu clicks call this script again with an action argument.
@@ -39,7 +39,7 @@ case "${1:-}" in
     ;;
   custom)
     answer=$(osascript \
-      -e 'text returned of (display dialog "Keep awake for how long?" & return & "1m to 5h, e.g. 45m, 2h, 1h30m" default answer "1h" with title "disablesleep")' \
+      -e 'text returned of (display dialog "Sleepwalk for how long?" & return & "1m to 5h, e.g. 45m, 2h, 1h30m" default answer "1h" with title "sleepwalk")' \
       2>/dev/null) || exit 0 # Cancel
     run_cli "$answer"
     exit 0
@@ -82,7 +82,7 @@ long_left() {
 if [ ! -x "$CLI" ]; then
   echo ":exclamationmark.triangle: | color=red"
   echo "---"
-  echo "disablesleep CLI not found at $CLI"
+  echo "sleepwalk CLI not found at $CLI"
   exit 0
 fi
 
@@ -92,7 +92,7 @@ action="bash=\"$SELF\" terminal=false refresh=true"
 
 # Menu bar title
 if [ "$state" = disabled ] && [ "$exp" != - ]; then
-  echo ":cup.and.saucer.fill: $(short_left $((exp - now)))"
+  echo ":figure.walk: $(short_left $((exp - now)))"
 elif [ "$state" = disabled ]; then
   echo ":exclamationmark.triangle.fill: | sfcolor=red"
 else
@@ -102,7 +102,7 @@ echo "---"
 
 # Status
 if [ "$state" = disabled ] && [ "$exp" != - ]; then
-  echo "Sleep is off until $(date -r "$exp" +%H:%M:%S)"
+  echo "Sleepwalking until $(date -r "$exp" +%H:%M:%S)"
   echo "$(long_left $((exp - now))) left | size=12"
 elif [ "$state" = disabled ]; then
   echo "Sleep is off and no timer is running | color=red"
@@ -117,17 +117,17 @@ if [ "$pw" != yes ]; then
   echo "Set up passwordless mode… | bash=\"$CLI\" param1=setup terminal=true refresh=true"
   echo "Needed once so the menu can turn sleep off and on. Opens Terminal. | size=11"
   if [ "$state" = disabled ]; then
-    echo "Turn sleep back on now (Terminal) | bash=\"$CLI\" param1=off terminal=true refresh=true"
+    echo "Wake up now (Terminal) | bash=\"$CLI\" param1=off terminal=true refresh=true"
   fi
   exit 0
 fi
 
 if [ "$state" = disabled ]; then
-  echo "Turn sleep back on now | $action param1=run param2=off"
+  echo "Wake up now (sleep back on) | $action param1=run param2=off"
   echo "---"
   echo "Restart timer with"
 else
-  echo "Keep awake for"
+  echo "Sleepwalk for"
 fi
 for d in $PRESETS; do
   echo "--$d | $action param1=run param2=$d"

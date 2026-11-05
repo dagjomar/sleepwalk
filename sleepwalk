@@ -1,12 +1,12 @@
 #!/bin/bash
-# disablesleep — keep a Mac awake (lid closed too) for a bounded time.
+# sleepwalk — let a Mac sleepwalk: stay awake (lid closed too) for a bounded time.
 #
-#   disablesleep <duration>   disable sleep, re-enable automatically after <duration>
-#   disablesleep off          re-enable sleep now and cancel the timer
-#   disablesleep status       show the current setting and time left
-#   disablesleep check        print a warning if sleep is off with no timer running
-#   disablesleep setup        allow toggling sleep without a password (sudoers rule)
-#   disablesleep setup remove remove that rule again
+#   sleepwalk <duration>   disable sleep, re-enable automatically after <duration>
+#   sleepwalk off          re-enable sleep now and cancel the timer
+#   sleepwalk status       show the current setting and time left
+#   sleepwalk check        print a warning if sleep is off with no timer running
+#   sleepwalk setup        allow toggling sleep without a password (sudoers rule)
+#   sleepwalk setup remove remove that rule again
 #
 # <duration> is 1m–5h: 45m, 2h, 1h30m.
 #
@@ -21,13 +21,13 @@
 set -u
 
 PMSET=/usr/bin/pmset
-STATE=/tmp/disablesleep.state # "<timer pid> <expiry epoch>"
-SUDOERS_FILE=/etc/sudoers.d/disablesleep
+STATE=/tmp/sleepwalk.state # "<timer pid> <expiry epoch>"
+SUDOERS_FILE=/etc/sudoers.d/sleepwalk
 MIN_SECS=60
 MAX_SECS=$((5 * 3600))
 
 usage() {
-  echo "usage: disablesleep <1m–5h, e.g. 45m, 2h, 1h30m> | off | status [--raw] | check | setup [remove]" >&2
+  echo "usage: sleepwalk <1m–5h, e.g. 45m, 2h, 1h30m> | off | status [--raw] | check | setup [remove]" >&2
   exit 1
 }
 
@@ -104,46 +104,46 @@ cmd_status_raw() {
 cmd_status() {
   [ "${1:-}" = --raw ] && { cmd_status_raw; return; }
   if sleep_disabled; then
-    echo "Sleep: DISABLED"
+    echo "Sleep: off (sleepwalking)"
     if timer_alive; then
       local exp
       exp=$(timer_expiry)
       echo "Auto re-enable at $(date -r "$exp" +%H:%M:%S) ($(format_left $((exp - $(date +%s)))) left)"
     else
-      echo "No timer running. Run: disablesleep off"
+      echo "No timer running. Run: sleepwalk off"
     fi
   else
-    echo "Sleep: enabled"
+    echo "Sleep: on"
   fi
 }
 
 cmd_check() {
   if sleep_disabled && ! timer_alive; then
-    printf '\033[31m⚠ Sleep is DISABLED with no timer running. Run: disablesleep off\033[0m\n' >&2
+    printf '\033[31m⚠ Sleep is DISABLED with no timer running. Run: sleepwalk off\033[0m\n' >&2
   fi
   return 0
 }
 
 cmd_setup() {
   if [ "${1:-}" = remove ]; then
-    sudo rm -f "$SUDOERS_FILE" && echo "Removed $SUDOERS_FILE. disablesleep will ask for a password again."
+    sudo rm -f "$SUDOERS_FILE" && echo "Removed $SUDOERS_FILE. sleepwalk will ask for a password again."
     return
   fi
   local tmp
   tmp=$(mktemp) || exit 1
-  printf '# Installed by disablesleep: turn sleep off/on without a password.\n%s ALL=(root) NOPASSWD: %s -a disablesleep 0, %s -a disablesleep 1\n' \
+  printf '# Installed by sleepwalk: turn sleep off/on without a password.\n%s ALL=(root) NOPASSWD: %s -a disablesleep 0, %s -a disablesleep 1\n' \
     "$(id -un)" "$PMSET" "$PMSET" >"$tmp"
   if sudo visudo -cqf "$tmp" && sudo install -m 0440 -o root -g wheel "$tmp" "$SUDOERS_FILE"; then
     rm -f "$tmp"
   else
     rm -f "$tmp"
-    echo "disablesleep: could not install $SUDOERS_FILE" >&2
+    echo "sleepwalk: could not install $SUDOERS_FILE" >&2
     exit 1
   fi
   if passwordless; then
     echo "Done. $SUDOERS_FILE allows only: pmset -a disablesleep 0|1"
   else
-    echo "disablesleep: installed $SUDOERS_FILE, but sudo doesn't accept it (is sudoers.d included?)" >&2
+    echo "sleepwalk: installed $SUDOERS_FILE, but sudo doesn't accept it (is sudoers.d included?)" >&2
     exit 1
   fi
 }
@@ -159,7 +159,7 @@ cmd_start() {
   local secs
   secs=$(parse_duration "$1") || usage
   if [ "$secs" -lt "$MIN_SECS" ] || [ "$secs" -gt "$MAX_SECS" ]; then
-    echo "disablesleep: duration must be between 1m and 5h" >&2
+    echo "sleepwalk: duration must be between 1m and 5h" >&2
     exit 1
   fi
 
@@ -173,7 +173,7 @@ cmd_start() {
     pid=$!
   else
     [ -t 0 ] || {
-      echo "disablesleep: needs a password. Run it in a terminal, or run 'disablesleep setup' once." >&2
+      echo "sleepwalk: needs a password. Run it in a terminal, or run 'sleepwalk setup' once." >&2
       exit 1
     }
     sudo -v || exit 1
@@ -183,10 +183,10 @@ cmd_start() {
       echo $!' sh "$secs" "$STATE" "$PMSET") || exit 1
   fi
   echo "$pid $(($(date +%s) + secs))" >"$STATE"
-  echo "Sleep disabled until $(date -v+"${secs}"S +%H:%M:%S). Cancel early: disablesleep off"
+  echo "Sleepwalking until $(date -v+"${secs}"S +%H:%M:%S). Wake up early: sleepwalk off"
 }
 
-[ "$(uname)" = Darwin ] || { echo "disablesleep: macOS only" >&2; exit 1; }
+[ "$(uname)" = Darwin ] || { echo "sleepwalk: macOS only" >&2; exit 1; }
 
 case "${1:-}" in
   off) cmd_off ;;
