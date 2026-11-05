@@ -52,13 +52,27 @@ cmd_off() {
   sudo pmset -a disablesleep 0 && echo "Sleep re-enabled."
 }
 
+# 4521 -> "1h 15m 21s", 75 -> "1m 15s", 9 -> "9s"
+format_left() {
+  local s=$1
+  [ "$s" -lt 0 ] && s=0
+  local h=$((s / 3600)) m=$((s % 3600 / 60)) sec=$((s % 60))
+  if [ "$h" -gt 0 ]; then
+    echo "${h}h ${m}m ${sec}s"
+  elif [ "$m" -gt 0 ]; then
+    echo "${m}m ${sec}s"
+  else
+    echo "${sec}s"
+  fi
+}
+
 cmd_status() {
   if sleep_disabled; then
     echo "Sleep: DISABLED"
     if timer_alive; then
       local exp
       exp=$(timer_expiry)
-      echo "Auto re-enable at $(date -r "$exp" +%H:%M) ($(((exp - $(date +%s)) / 60)) min left)"
+      echo "Auto re-enable at $(date -r "$exp" +%H:%M:%S) ($(format_left $((exp - $(date +%s)))) left)"
     else
       echo "No timer running. Run: disablesleep off"
     fi
@@ -98,7 +112,7 @@ cmd_start() {
     nohup sh -c "sleep $1; pmset -a disablesleep 0; rm -f $2" >/dev/null 2>&1 &
     echo $!' sh "$secs" "$STATE") || exit 1
   echo "$pid $(($(date +%s) + secs))" >"$STATE"
-  echo "Sleep disabled until $(date -v+"${secs}"S +%H:%M). Cancel early: disablesleep off"
+  echo "Sleep disabled until $(date -v+"${secs}"S +%H:%M:%S). Cancel early: disablesleep off"
 }
 
 [ "$(uname)" = Darwin ] || { echo "disablesleep: macOS only" >&2; exit 1; }
