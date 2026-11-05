@@ -5,26 +5,43 @@
 #   disablesleep off          re-enable sleep now and cancel the timer
 #   disablesleep status       show the current setting and time left
 #   disablesleep check        print a warning if sleep is off with no timer running
+#   disablesleep setup        allow toggling sleep without a password (sudoers rule)
+#   disablesleep setup remove remove that rule again
 #
 # <duration> is 1m–5h: 45m, 2h, 1h30m.
 #
-# Wraps `pmset -a disablesleep`, which survives reboots. A root timer process
+# Wraps `pmset -a disablesleep`, which survives reboots. A background timer
 # turns sleep back on; `check` (run from your shell rc) catches the case where
 # that timer died, e.g. after a reboot, since macOS clears /tmp at boot.
+#
+# Without the sudoers rule, sudo asks for a password and the timer runs as
+# root. With it, the timer runs as you and only ever calls
+# `sudo -n /usr/bin/pmset -a disablesleep 0|1`, the two commands the rule allows.
 
 set -u
 
+PMSET=/usr/bin/pmset
 STATE=/tmp/disablesleep.state # "<timer pid> <expiry epoch>"
+SUDOERS_FILE=/etc/sudoers.d/disablesleep
 MIN_SECS=60
 MAX_SECS=$((5 * 3600))
 
 usage() {
-  echo "usage: disablesleep <1m–5h, e.g. 45m, 2h, 1h30m> | off | status | check" >&2
+  echo "usage: disablesleep <1m–5h, e.g. 45m, 2h, 1h30m> | off | status [--raw] | check | setup [remove]" >&2
   exit 1
 }
 
 sleep_disabled() {
-  pmset -g 2>/dev/null | grep -q 'SleepDisabled[[:space:]]*1'
+  "$PMSET" -g 2>/dev/null | grep -q 'SleepDisabled[[:space:]]*1'
+}
+
+# True only when the sudoers rule lets us run both pmset commands without a
+# password. -k ignores cached sudo credentials, so a recent `sudo` in this
+# terminal can't make it look like the rule is there.
+passwordless() {
+  [ -e "$SUDOERS_FILE" ] &&
+    sudo -k -n -l "$PMSET" -a disablesleep 0 >/dev/null 2>&1 &&
+    sudo -k -n -l "$PMSET" -a disablesleep 1 >/dev/null 2>&1
 }
 
 timer_pid() {
@@ -41,15 +58,23 @@ timer_alive() {
   ps -p "$pid" >/dev/null 2>&1
 }
 
+# A timer started without the rule is owned by root; only a terminal can
+# sudo-kill it. If it survives, it just turns sleep back on early.
 kill_timer() {
   local pid
-  pid=$(timer_pid) && sudo kill "$pid" 2>/dev/null
+  if pid=$(timer_pid); then
+    kill "$pid" 2>/dev/null || { [ -t 0 ] && sudo kill "$pid" 2>/dev/null; }
+  fi
   rm -f "$STATE"
 }
 
 cmd_off() {
   kill_timer
-  sudo pmset -a disablesleep 0 && echo "Sleep re-enabled."
+  if passwordless; then
+    sudo -n "$PMSET" -a disablesleep 0
+  else
+    sudo "$PMSET" -a disablesleep 0
+  fi && echo "Sleep re-enabled."
 }
 
 # 4521 -> "1h 15m 21s", 75 -> "1m 15s", 9 -> "9s"
@@ -66,7 +91,18 @@ format_left() {
   fi
 }
 
+# One line for scripts such as the SwiftBar plugin:
+#   <enabled|disabled> <expiry epoch, or - when no timer> <passwordless yes|no>
+cmd_status_raw() {
+  local state=enabled exp=- pw=no
+  sleep_disabled && state=disabled
+  if [ $state = disabled ] && timer_alive; then exp=$(timer_expiry); fi
+  passwordless && pw=yes
+  echo "$state $exp $pw"
+}
+
 cmd_status() {
+  [ "${1:-}" = --raw ] && { cmd_status_raw; return; }
   if sleep_disabled; then
     echo "Sleep: DISABLED"
     if timer_alive; then
@@ -88,6 +124,30 @@ cmd_check() {
   return 0
 }
 
+cmd_setup() {
+  if [ "${1:-}" = remove ]; then
+    sudo rm -f "$SUDOERS_FILE" && echo "Removed $SUDOERS_FILE. disablesleep will ask for a password again."
+    return
+  fi
+  local tmp
+  tmp=$(mktemp) || exit 1
+  printf '# Installed by disablesleep: turn sleep off/on without a password.\n%s ALL=(root) NOPASSWD: %s -a disablesleep 0, %s -a disablesleep 1\n' \
+    "$(id -un)" "$PMSET" "$PMSET" >"$tmp"
+  if sudo visudo -cqf "$tmp" && sudo install -m 0440 -o root -g wheel "$tmp" "$SUDOERS_FILE"; then
+    rm -f "$tmp"
+  else
+    rm -f "$tmp"
+    echo "disablesleep: could not install $SUDOERS_FILE" >&2
+    exit 1
+  fi
+  if passwordless; then
+    echo "Done. $SUDOERS_FILE allows only: pmset -a disablesleep 0|1"
+  else
+    echo "disablesleep: installed $SUDOERS_FILE, but sudo doesn't accept it (is sudoers.d included?)" >&2
+    exit 1
+  fi
+}
+
 parse_duration() {
   local re='^(([0-9]+)h)?(([0-9]+)m)?$'
   [ -n "$1" ] && [[ $1 =~ $re ]] || return 1
@@ -103,14 +163,25 @@ cmd_start() {
     exit 1
   fi
 
-  sudo -v || exit 1
-  # Running it again replaces the old timer instead of stacking timers.
-  kill_timer
-
   local pid
-  pid=$(sudo sh -c 'pmset -a disablesleep 1 || exit 1
-    nohup sh -c "sleep $1; pmset -a disablesleep 0; rm -f $2" >/dev/null 2>&1 &
-    echo $!' sh "$secs" "$STATE") || exit 1
+  if passwordless; then
+    # Running it again replaces the old timer instead of stacking timers.
+    kill_timer
+    sudo -n "$PMSET" -a disablesleep 1 || exit 1
+    nohup /bin/sh -c 'sleep "$1"; sudo -n "$2" -a disablesleep 0; rm -f "$3"' \
+      sh "$secs" "$PMSET" "$STATE" >/dev/null 2>&1 </dev/null &
+    pid=$!
+  else
+    [ -t 0 ] || {
+      echo "disablesleep: needs a password. Run it in a terminal, or run 'disablesleep setup' once." >&2
+      exit 1
+    }
+    sudo -v || exit 1
+    kill_timer
+    pid=$(sudo sh -c '"$3" -a disablesleep 1 || exit 1
+      nohup sh -c "sleep $1; $3 -a disablesleep 0; rm -f $2" >/dev/null 2>&1 </dev/null &
+      echo $!' sh "$secs" "$STATE" "$PMSET") || exit 1
+  fi
   echo "$pid $(($(date +%s) + secs))" >"$STATE"
   echo "Sleep disabled until $(date -v+"${secs}"S +%H:%M:%S). Cancel early: disablesleep off"
 }
@@ -119,8 +190,9 @@ cmd_start() {
 
 case "${1:-}" in
   off) cmd_off ;;
-  status) cmd_status ;;
+  status) cmd_status "${2:-}" ;;
   check) cmd_check ;;
+  setup) cmd_setup "${2:-}" ;;
   -h | --help | "") usage ;;
   *) cmd_start "$1" ;;
 esac
