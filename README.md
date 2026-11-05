@@ -32,10 +32,13 @@ running hot until the battery is empty.
 
 ```bash
 git clone <this repo> ~/code/disablesleep
-ln -s ~/code/disablesleep/disablesleep /usr/local/bin/disablesleep
+mkdir -p ~/.local/bin
+ln -s ~/code/disablesleep/disablesleep ~/.local/bin/disablesleep
 ```
 
-Any directory on your `PATH` works in place of `/usr/local/bin`. Then add the
+Any directory on your `PATH` works. If `~/.local/bin` isn't on yours, add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell rc. `/usr/local/bin` is
+root-owned on newer Macs, so linking there needs `sudo`. Then add the
 warning check to `~/.zshrc` or `~/.bashrc`:
 
 ```bash
