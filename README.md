@@ -112,3 +112,7 @@ Symlink it rather than copying, so `git pull` updates the plugin too. The
   boot, which is how `check` knows the timer didn't survive a reboot.
 - On battery with the lid closed, the Mac stays awake until the timer ends or
   the battery runs out.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
